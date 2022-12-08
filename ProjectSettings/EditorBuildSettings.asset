@@ -5,10 +5,13 @@ EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
   m_Scenes:
-  - enabled: 1
+  - enabled: 0
     path: Assets/Scenes/RemoteController.unity
     guid: 2cda990e2423bbf4892e6590ba056729
   - enabled: 0
     path: Assets/Example/ArduinoHM10Test/ArduinoHM10Test.unity
     guid: d8c17b59e0cb44d9aa604b9b8c326e9f
+  - enabled: 1
+    path: Assets/Example/ScannerTest/ScannerTest.unity
+    guid: 2240b8b60c8f44aeea0ffe3c13ded6af
   m_configObjects: {}

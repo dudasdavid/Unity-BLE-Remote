@@ -150,8 +150,20 @@ extern "C" {
             [_unityBluetoothLE disconnectAll];
     }
     
+    void _iOSBluetoothLERequestMtu (char *name, int mtu) {
+        
+        if (_unityBluetoothLE != nil)
+            [_unityBluetoothLE requestMtu:[NSString stringWithFormat:@"%s", name] mtu:mtu];
+    }
+    
+    void _iOSBluetoothLEReadRSSI (char *name) {
+        
+        if (_unityBluetoothLE != nil)
+            [_unityBluetoothLE readRSSI:[NSString stringWithFormat:@"%s", name]];
+    }
+
 #if !TARGET_OS_TV
-        void _iOSBluetoothLEScanForBeacons (char *proximityUUIDsStringRaw) {
+    void _iOSBluetoothLEScanForBeacons (char *proximityUUIDsStringRaw) {
         
         if (_unityBluetoothLE != nil)
         {
@@ -171,8 +183,13 @@ extern "C" {
                         NSArray *parts = [sUUID componentsSeparatedByString:@":"];
                         if (parts.count == 2)
                         {
-                            CLBeaconRegion *beaconRegion = [[CLBeaconRegion alloc] initWithProximityUUID:[[NSUUID alloc] initWithUUIDString:parts[0]] identifier:parts[1]];
-                            [beaconRegions addObject:beaconRegion];
+                            if (@available(iOS 13.0, *)) {
+                                CLBeaconRegion *beaconRegion = [[CLBeaconRegion alloc] initWithUUID:[[NSUUID alloc] initWithUUIDString:parts[0]] identifier:parts[1]];
+                                [beaconRegions addObject:beaconRegion];
+                            } else {
+                                CLBeaconRegion *beaconRegion = [[CLBeaconRegion alloc] initWithProximityUUID:[[NSUUID alloc] initWithUUIDString:parts[0]] identifier:parts[1]];
+                                [beaconRegions addObject:beaconRegion];
+                            }
                             
                             [_unityBluetoothLE scanForBeacons:beaconRegions];
                         }
@@ -284,6 +301,8 @@ extern "C" {
 
 - (void)initialize:(BOOL)asCentral asPeripheral:(BOOL)asPeripheral
 {
+    _mtu = 20;
+    
     _isPaused = FALSE;
     _isInitializing = TRUE;
     
@@ -292,6 +311,7 @@ extern "C" {
     _peripheralManager = nil;
     _services = nil;
     _characteristics = nil;
+    _allCharacteristics = nil;
 #endif
     if (asCentral)
         _centralManager = [[CBCentralManager alloc] initWithDelegate:self queue:nil];
@@ -302,6 +322,7 @@ extern "C" {
     
     _services = [[NSMutableDictionary alloc] init];
     _characteristics = [[NSMutableDictionary alloc] init];
+    _allCharacteristics = [[NSMutableDictionary alloc] init];
 #endif
     
     _peripherals = [[NSMutableDictionary alloc] init];
@@ -381,7 +402,13 @@ extern "C" {
     NSEnumerator *enumerator = [_characteristics keyEnumerator];
     id key;
     while ((key = [enumerator nextObject]))
-        [characteristics addObject:[_characteristics objectForKey:key]];
+    {
+        CBCharacteristic *characteristic = [_characteristics objectForKey:key];
+        [_characteristics removeObjectForKey:key];
+        [characteristics addObject:characteristic];
+        [_allCharacteristics setObject:characteristic forKey:[characteristic UUID]];
+    }
+    [_characteristics removeAllObjects];
     
     service.characteristics = characteristics;
     
@@ -417,6 +444,9 @@ extern "C" {
         if (_peripheralManager != nil)
             [_peripheralManager removeAllServices];
     }
+
+    if (_allCharacteristics != nil)
+        [_allCharacteristics removeAllObjects];
 }
 
 - (void)peripheralName:(NSString *)newName
@@ -476,10 +506,10 @@ extern "C" {
 
 - (void)updateCharacteristicValue:(NSString *)uuid value:(NSData *)value
 {
-    if (_characteristics != nil)
+    if (_allCharacteristics != nil)
     {
         CBUUID *cbuuid = [CBUUID UUIDWithString:uuid];
-        CBMutableCharacteristic *characteristic = [_characteristics objectForKey:cbuuid];
+        CBMutableCharacteristic *characteristic = [_allCharacteristics objectForKey:cbuuid];
         if (characteristic != nil)
         {
             characteristic.value = value;
@@ -487,6 +517,14 @@ extern "C" {
                 [_peripheralManager updateValue:value forCharacteristic:characteristic onSubscribedCentrals:nil];
         }
     }
+}
+
+- (void)requestMtu:(NSString *)name mtu:(int)mtu
+{
+    _mtu = mtu;
+
+    NSString *message = [NSString stringWithFormat:@"MtuChanged~%@~%d", name, _mtu];
+    UnitySendMessage ("BluetoothLEReceiver", "OnBluetoothMessage", [message UTF8String]);
 }
 
 - (void)scanForBeacons:(NSArray<CLBeaconRegion *>*)beaconRegions
@@ -615,6 +653,18 @@ extern "C" {
     }
 }
 
+- (void)readRSSI:(NSString *)name
+{
+    if (_peripherals != nil && name != nil)
+    {
+        CBPeripheral *peripheral = [_peripherals objectForKey:name];
+        if (peripheral != nil)
+        {
+            [peripheral readRSSI];
+        }
+    }
+}
+
 - (CBCharacteristic *)getCharacteristic:(NSString *)name service:(NSString *)serviceString characteristic:(NSString *)characteristicString
 {
     CBCharacteristic *returnCharacteristic = nil;
@@ -674,7 +724,7 @@ extern "C" {
                 if (withResponse)
                     type = CBCharacteristicWriteWithResponse;
                 
-                [peripheral writeValue:data forCharacteristic:characteristic type:type];
+                [self writeCharactersticBytes:peripheral characteristic:characteristic data:data withResponse:type];
             }
         }
     }
@@ -785,6 +835,8 @@ extern "C" {
         NSString *name = [advertisementData objectForKey:CBAdvertisementDataLocalNameKey];
         if (name == nil)
             name = peripheral.name;
+        if (name == nil)
+            name = @"No Name";
         
         if (name != nil)
         {
@@ -951,6 +1003,74 @@ extern "C" {
     }
 }
 
+- (void)writeCharactersticBytesReset
+{
+    _writeCharacteristicBytes = nil;
+    _writeCharacteristicLength = 0;
+    _writeCharacteristicPosition = 0;
+    _writeCharacteristicBytesToWrite = 0;
+    _writeCharacteristicWithResponse = CBCharacteristicWriteWithResponse;
+    _writeCharacteristicRetries = 3;
+}
+
+- (void)writeCharactersticBytes:(CBPeripheral *)peripheral characteristic:(CBCharacteristic *)characteristic data:(NSData *)data withResponse:(CBCharacteristicWriteType)withResponse
+{
+    if (_writeCharacteristicBytes == nil && (_mtu == 0 || data.length > _mtu))
+    {
+        _writeCharacteristicLength = data.length;
+        _writeCharacteristicBytes = (unsigned char*)malloc(_writeCharacteristicLength);
+        memcpy(_writeCharacteristicBytes, [data bytes], _writeCharacteristicLength);
+        _writeCharacteristicPosition = 0;
+        _writeCharacteristicWithResponse = withResponse;
+        if (_mtu == 0)
+            _writeCharacteristicBytesToWrite = _writeCharacteristicLength;
+        else
+            _writeCharacteristicBytesToWrite = _mtu;
+    }
+
+    NSLog(@"write characteristic block");
+
+    if (_writeCharacteristicBytes != nil)
+    {
+        NSMutableData *newData = [NSMutableData dataWithCapacity:_writeCharacteristicBytesToWrite];
+        [newData appendBytes:&_writeCharacteristicBytes[_writeCharacteristicPosition] length:_writeCharacteristicBytesToWrite];
+        data = newData;
+        NSLog(@"data: %@", data);
+    }
+    
+    NSLog(@"writing %ld bytes, %ld with response", data.length, withResponse);
+    [peripheral writeValue:data forCharacteristic:characteristic type:withResponse];
+    
+    if (withResponse == CBCharacteristicWriteWithoutResponse)
+    {
+        double delayInSeconds = 0.01;
+        dispatch_time_t popTime = dispatch_time(DISPATCH_TIME_NOW, delayInSeconds * NSEC_PER_SEC);
+        dispatch_after(popTime, dispatch_get_main_queue(), ^(void){
+            [self writeNextPacket:peripheral characteristic:characteristic];
+        });
+    }
+}
+
+- (void)writeNextPacket:(CBPeripheral *)peripheral characteristic:(CBCharacteristic *)characteristic
+{
+    if (_writeCharacteristicLength > _writeCharacteristicPosition + _writeCharacteristicBytesToWrite)
+    {
+        _writeCharacteristicPosition += _writeCharacteristicBytesToWrite;
+        if (_writeCharacteristicPosition + _writeCharacteristicBytesToWrite > _writeCharacteristicLength)
+            _writeCharacteristicBytesToWrite = _writeCharacteristicLength - _writeCharacteristicPosition;
+
+        NSMutableData *data = [NSMutableData dataWithCapacity:_writeCharacteristicLength];
+        [data appendBytes:_writeCharacteristicBytes length:_writeCharacteristicLength];
+        [self writeCharactersticBytes:peripheral characteristic:characteristic data:data withResponse:_writeCharacteristicWithResponse];
+    }
+    else
+    {
+        [self writeCharactersticBytesReset];
+        NSString *message = [NSString stringWithFormat:@"DidWriteCharacteristic~%@", characteristic.UUID];
+        UnitySendMessage ("BluetoothLEReceiver", "OnBluetoothMessage", [message UTF8String] );
+    }
+}
+
 - (void)peripheral:(CBPeripheral *)peripheral didWriteValueForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error
 {
     if (error)
@@ -960,8 +1080,17 @@ extern "C" {
     }
     else
     {
-        NSString *message = [NSString stringWithFormat:@"DidWriteCharacteristic~%@", characteristic.UUID];
-        UnitySendMessage ("BluetoothLEReceiver", "OnBluetoothMessage", [message UTF8String] );
+        NSLog(@"%ld bytes written, %ld position, %ld length, %ld with response", _writeCharacteristicBytesToWrite, _writeCharacteristicPosition, _writeCharacteristicLength, _writeCharacteristicWithResponse);
+        
+        if (_writeCharacteristicBytesToWrite > 0)
+        {
+            [self writeNextPacket:peripheral characteristic:characteristic];
+        }
+        else
+        {
+            NSString *message = [NSString stringWithFormat:@"DidWriteCharacteristic~%@", characteristic.UUID];
+            UnitySendMessage ("BluetoothLEReceiver", "OnBluetoothMessage", [message UTF8String] );
+        }
     }
 }
 
@@ -978,6 +1107,24 @@ extern "C" {
         if (foundPeripheral != nil)
         {
             NSString *message = [NSString stringWithFormat:@"DidUpdateNotificationStateForCharacteristic~%@~%@", foundPeripheral, characteristic.UUID];
+            UnitySendMessage ("BluetoothLEReceiver", "OnBluetoothMessage", [message UTF8String] );
+        }
+    }
+}
+
+- (void)peripheral:(CBPeripheral *) peripheral didReadRSSI:(NSNumber *)RSSI error:(NSError *)error
+{
+    if (error)
+    {
+        NSString *message = [NSString stringWithFormat:@"Error~%@", error.description];
+        UnitySendMessage ("BluetoothLEReceiver", "OnBluetoothMessage", [message UTF8String] );
+    }
+    else
+    {
+        NSString *foundPeripheral = [self findPeripheralName:peripheral];
+        if (foundPeripheral != nil)
+        {
+            NSString *message = [NSString stringWithFormat:@"DidReadRSSI~%@~%@", foundPeripheral, RSSI];
             UnitySendMessage ("BluetoothLEReceiver", "OnBluetoothMessage", [message UTF8String] );
         }
     }
@@ -1039,7 +1186,7 @@ extern "C" {
     
     if (_peripheralManager != nil)
     {
-        CBMutableCharacteristic *characteristic = [_characteristics objectForKey:request.characteristic.UUID];
+        CBMutableCharacteristic *characteristic = [_allCharacteristics objectForKey:request.characteristic.UUID];
         
         if (characteristic != nil)
         {
@@ -1065,7 +1212,7 @@ extern "C" {
             CBATTRequest *request = [requests objectAtIndex:i];
             if (request != nil)
             {
-                CBMutableCharacteristic *characteristic = [_characteristics objectForKey:request.characteristic.UUID];
+                CBMutableCharacteristic *characteristic = [_allCharacteristics objectForKey:request.characteristic.UUID];
                 
                 if (characteristic != nil)
                 {

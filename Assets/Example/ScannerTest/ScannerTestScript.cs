@@ -12,10 +12,7 @@ public class ScannerTestScript : MonoBehaviour
 	private bool _startScan = true;
 	private Dictionary<string, ScannedItemScript> _scannedItems;
 
-	public void OnButton()
-	{
-		BluetoothLEHardwareInterface.DeInitialize (() => Debug.Log("Deinitialized"));
-	}
+	private string[] serviceFilter = { "FFE0"};
 
 	public void OnStopScanning()
 	{
@@ -55,37 +52,41 @@ public class ScannerTestScript : MonoBehaviour
 					_startScan = false;
 					_timeout = _startScanTimeout;
 
-					BluetoothLEHardwareInterface.ScanForPeripheralsWithServices (null, null, (address, name, rssi, bytes) => {
+					BluetoothLEHardwareInterface.ScanForPeripheralsWithServices (serviceFilter, null, (address, name, rssi, bytes) => {
 
 						BluetoothLEHardwareInterface.Log ("item scanned: " + address);
-						if (_scannedItems.ContainsKey (address))
-						{
-							var scannedItem = _scannedItems[address];
-							scannedItem.TextRSSIValue.text = rssi.ToString ();
-							BluetoothLEHardwareInterface.Log ("already in list " + rssi.ToString ());
-						}
-						else
-						{
-							BluetoothLEHardwareInterface.Log ("item new: " + address);
-							var newItem = Instantiate (ScannedItemPrefab);
-							if (newItem != null)
+
+						//if (name == "CC41-A"){
+
+							if (_scannedItems.ContainsKey (address))
 							{
-								BluetoothLEHardwareInterface.Log ("item created: " + address);
-								newItem.transform.parent = transform;
-								newItem.transform.localScale = Vector3.one;
-
-								var scannedItem = newItem.GetComponent<ScannedItemScript> ();
-								if (scannedItem != null)
+								var scannedItem = _scannedItems[address];
+								scannedItem.TextRSSIValue.text = rssi.ToString ();
+								BluetoothLEHardwareInterface.Log ("already in list " + rssi.ToString ());
+							}
+							else
+							{
+								BluetoothLEHardwareInterface.Log ("item new: " + address);
+								var newItem = Instantiate (ScannedItemPrefab);
+								if (newItem != null)
 								{
-									BluetoothLEHardwareInterface.Log ("item set: " + address);
-									scannedItem.TextAddressValue.text = address;
-									scannedItem.TextNameValue.text = name;
-									scannedItem.TextRSSIValue.text = rssi.ToString ();
+									BluetoothLEHardwareInterface.Log ("item created: " + address);
+									newItem.transform.parent = transform;
+									newItem.transform.localScale = Vector3.one;
 
-									_scannedItems[address] = scannedItem;
+									var scannedItem = newItem.GetComponent<ScannedItemScript> ();
+									if (scannedItem != null)
+									{
+										BluetoothLEHardwareInterface.Log ("item set: " + address);
+										scannedItem.TextAddressValue.text = address;
+										scannedItem.TextNameValue.text = name;
+										scannedItem.TextRSSIValue.text = rssi.ToString ();
+
+										_scannedItems[address] = scannedItem;
+									}
 								}
 							}
-						}
+						//}
 					}, true);
 				}
 				else
