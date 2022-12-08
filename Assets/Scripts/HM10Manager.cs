@@ -381,7 +381,7 @@ public class HM10Manager : MonoBehaviour
 	void XY2RPhi(float x, float y, ref float r, ref float phi)
 	{
 
-		r = Mathf.Sqrt(x * x + y * y)*100;
+		r = Mathf.Sqrt(x * x + y * y)*70;
 		phi = Mathf.Atan2(y, x);
 		if (phi < 0)
 		{
